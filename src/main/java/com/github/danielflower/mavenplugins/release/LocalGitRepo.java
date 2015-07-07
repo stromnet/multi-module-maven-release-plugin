@@ -19,6 +19,19 @@ import java.util.Collection;
 import java.util.List;
 
 import static com.github.danielflower.mavenplugins.release.FileUtils.pathOf;
+import com.jcraft.jsch.IdentityRepository;
+import com.jcraft.jsch.JSch;
+import com.jcraft.jsch.JSchException;
+import com.jcraft.jsch.Session;
+import com.jcraft.jsch.agentproxy.AgentProxyException;
+import com.jcraft.jsch.agentproxy.Connector;
+import com.jcraft.jsch.agentproxy.RemoteIdentityRepository;
+import com.jcraft.jsch.agentproxy.USocketFactory;
+import com.jcraft.jsch.agentproxy.connector.SSHAgentConnector;
+import com.jcraft.jsch.agentproxy.usocket.NCUSocketFactory;
+import org.eclipse.jgit.transport.JschConfigSessionFactory;
+import org.eclipse.jgit.transport.OpenSshConfig;
+import org.eclipse.jgit.util.FS;
 
 public class LocalGitRepo {
 
@@ -26,6 +39,40 @@ public class LocalGitRepo {
     private final String remoteUrl;
     private boolean hasReverted = false; // A premature optimisation? In the normal case, file reverting occurs twice, which this bool prevents
     private Collection<Ref> remoteTags;
+
+    static {
+        JschConfigSessionFactory f = new JschConfigSessionFactory() {
+
+            @Override
+            protected void configure(OpenSshConfig.Host host, Session sn) {
+            }
+
+            @Override
+            protected JSch createDefaultJSch(FS fs) throws JSchException {
+                Connector con = null;
+                try {
+                    if (SSHAgentConnector.isConnectorAvailable()) {
+                        USocketFactory usf = new NCUSocketFactory();
+                        //USocketFactory usf = new JNAUSocketFactory();
+                        con = new SSHAgentConnector(usf);
+                    }
+                } catch (AgentProxyException e) {
+                    System.out.println(e);
+                }
+                final JSch jsch = super.createDefaultJSch(fs);
+                if (con != null) {
+                    JSch.setConfig("PreferredAuthentications", "publickey");
+
+                    IdentityRepository identityRepository = new RemoteIdentityRepository(con);
+                    jsch.setIdentityRepository(identityRepository);
+                }
+
+                return jsch;
+            }
+
+        };
+        JschConfigSessionFactory.setInstance(f);
+    }
 
     LocalGitRepo(Git git, String remoteUrl) {
         this.git = git;
@@ -39,9 +86,11 @@ public class LocalGitRepo {
             String summary = "Cannot release with uncommitted changes. Please check the following files:";
             List<String> message = new ArrayList<String>();
             message.add(summary);
+            message.add("Uncommited:");
             for (String path : status.getUncommittedChanges()) {
                 message.add(" * " + path);
             }
+            message.add("Untracked:");
             for (String path : status.getUntracked()) {
                 message.add(" * " + path);
             }
